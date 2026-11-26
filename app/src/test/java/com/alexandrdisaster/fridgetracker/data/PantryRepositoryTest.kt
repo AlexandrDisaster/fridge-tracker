@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.alexandrdisaster.fridgetracker.core.GroceryItem
+import com.alexandrdisaster.fridgetracker.core.ShoppingEntry
 import java.time.LocalDate
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -47,6 +48,20 @@ class PantryRepositoryTest {
         assertEquals("Milk", shopping.single().name)
         assertEquals(1.0, shopping.single().amount, 0.0)
         assertEquals("L", shopping.single().unit)
+    }
+
+    @Test
+    fun restockMovesCheckedItemOnceWithChosenFields() = runBlocking {
+        repository.addShoppingItem(ShoppingEntry("Milk", 1.0, "bottle"))
+        val id = repository.observeShoppingItems().first().single().id
+        repository.setShoppingItemChecked(id, true)
+        val expiry = LocalDate.of(2026, 12, 8)
+
+        repeat(2) { repository.restockShoppingItem(id, "Whole milk", 2.5, "L", expiry) }
+
+        assertTrue(repository.observeShoppingItems().first().isEmpty())
+        val grocery = repository.observeGroceries().first().single()
+        assertEquals(GroceryItem(grocery.id, "Whole milk", 2.5, "L", expiry), grocery)
     }
 
     @Test

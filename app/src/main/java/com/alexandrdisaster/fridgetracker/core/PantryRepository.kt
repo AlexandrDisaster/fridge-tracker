@@ -19,6 +19,10 @@ interface PantryRepository {
     suspend fun setShoppingItemChecked(itemId: String, checked: Boolean)
     suspend fun removeShoppingItem(itemId: String)
 
+    suspend fun restockShoppingItem(
+        shoppingItemId: String, name: String, amount: Double, unit: String, expiryDate: LocalDate,
+    )
+
     /** Moves expired groceries to the shopping list and returns the items that newly expired. */
     suspend fun processExpiredItems(today: LocalDate): List<GroceryItem>
 }

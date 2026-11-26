@@ -74,7 +74,20 @@ class RoomPantryRepository internal constructor(
         dao.add(ShoppingRow(UUID.randomUUID().toString(), entry.name, entry.amount, entry.unit))
     }
 
+    override suspend fun restockShoppingItem(
+        shoppingItemId: String, name: String, amount: Double, unit: String, expiryDate: LocalDate,
+    ) {
+        db.withTransaction {
+            if (dao.removeShopping(shoppingItemId) == 0) return@withTransaction
+            require(name.isNotBlank() && unit.isNotBlank())
+            require(amount.isFinite() && amount > 0.0)
+            dao.save(GroceryRow(UUID.randomUUID().toString(), name.trim(), amount, unit.trim(), expiryDate.toEpochDay()))
+        }
+    }
+
     override suspend fun removeGrocery(groceryId: String) = dao.removeGrocery(groceryId)
     override suspend fun setShoppingItemChecked(itemId: String, checked: Boolean) = dao.check(itemId, checked)
-    override suspend fun removeShoppingItem(itemId: String) = dao.removeShopping(itemId)
+    override suspend fun removeShoppingItem(itemId: String) {
+        dao.removeShopping(itemId)
+    }
 }
