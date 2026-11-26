@@ -10,6 +10,9 @@ class ProductCatalogTest {
     fun suggestionsUseKnownProductAndReferenceDate() {
         val from = LocalDate.of(2026, 12, 30)
         assertEquals(3, ProductCatalog.estimatedFridgeDays(" Yogurt "))
+        assertEquals(3, ProductCatalog.estimatedFridgeDays("plain Greek yogurt"))
+        assertEquals(5, ProductCatalog.estimatedFridgeDays("Cherry tomatoes"))
+        assertEquals(1, ProductCatalog.estimatedFridgeDays("raw chicken breast"))
         assertEquals(LocalDate.of(2027, 1, 4), ProductCatalog.suggestedExpiryDate("Tomatoes", from))
         assertNull(ProductCatalog.estimatedFridgeDays("tomato sauce"))
         assertNull(ProductCatalog.suggestedExpiryDate("unknown", from))

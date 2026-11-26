@@ -6,6 +6,8 @@ import com.alexandrdisaster.fridgetracker.core.GroceryItem
 import com.alexandrdisaster.fridgetracker.core.PantryRepository
 import com.alexandrdisaster.fridgetracker.core.ShoppingEntry
 import com.alexandrdisaster.fridgetracker.core.ShoppingItem
+import com.alexandrdisaster.fridgetracker.core.ShoppingSuggestion
+import com.alexandrdisaster.fridgetracker.core.ShoppingSuggestionEngine
 import java.time.LocalDate
 import java.util.UUID
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,6 +21,7 @@ import kotlinx.coroutines.launch
 data class PantryUiState(
     val groceries: List<GroceryItem> = emptyList(),
     val shoppingItems: List<ShoppingItem> = emptyList(),
+    val suggestions: List<ShoppingSuggestion> = emptyList(),
     val isLoading: Boolean = true,
     val error: String? = null,
 )
@@ -34,6 +37,7 @@ class GroceryViewModel(private val repository: PantryRepository) : ViewModel() {
         PantryUiState(
             groceries = groceries,
             shoppingItems = shoppingItems,
+            suggestions = ShoppingSuggestionEngine.generate(groceries, shoppingItems, LocalDate.now()),
             isLoading = false,
             error = error,
         )
@@ -86,6 +90,28 @@ class GroceryViewModel(private val repository: PantryRepository) : ViewModel() {
             return
         }
         launchOperation { repository.addShoppingItem(ShoppingEntry(cleanName, amount, cleanUnit)) }
+    }
+
+    fun addSuggestion(suggestion: ShoppingSuggestion) {
+        addShoppingItem(suggestion.name, suggestion.suggestedAmount, suggestion.unit)
+    }
+
+    fun restockShoppingItem(
+        shoppingItemId: String,
+        name: String,
+        amount: Double,
+        unit: String,
+        expiryDate: LocalDate,
+    ) {
+        val cleanName = name.trim()
+        val cleanUnit = unit.trim()
+        if (cleanName.isEmpty() || cleanUnit.isEmpty() || !amount.isFinite() || amount <= 0.0) {
+            errors.value = "Enter a name, a positive amount, and a unit."
+            return
+        }
+        launchOperation {
+            repository.restockShoppingItem(shoppingItemId, cleanName, amount, cleanUnit, expiryDate)
+        }
     }
 
     fun setShoppingItemChecked(itemId: String, checked: Boolean) =

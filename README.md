@@ -4,9 +4,12 @@ A native Android app for keeping a live inventory of groceries, tracking quantit
 
 ## Features
 
-- Add and edit groceries with quantity, unit, and expiry date.
+- Add and edit groceries with quantity, a selectable unit, and expiry date.
+- Suggest approximate fridge expiry dates for common groceries; always follow package labeling and use your judgment.
 - Adjust pantry amounts as food is used.
+- Get optional in-app shopping suggestions for low-stock and soon-expiring groceries.
 - Automatically queue finished and expired groceries on the in-app shopping list.
+- Select checked shopping-list items and add them to the fridge with quantity, unit, and expiry-date selection.
 - Receive on-device Android notifications when groceries expire or run out.
 - Keep data on-device; no account or network connection is required for pantry tracking.
 

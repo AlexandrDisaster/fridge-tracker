@@ -19,7 +19,10 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -45,7 +48,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.alexandrdisaster.fridgetracker.core.GroceryItem
+import com.alexandrdisaster.fridgetracker.core.ProductCatalog
 import com.alexandrdisaster.fridgetracker.core.ShoppingItem
+import com.alexandrdisaster.fridgetracker.core.ShoppingSuggestion
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -58,9 +63,11 @@ fun GroceryScreen(viewModel: GroceryViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     var selectedTab by rememberSaveable { mutableStateOf(PantryTab.Fridge) }
     var editingItem by remember { mutableStateOf<GroceryItem?>(null) }
+    var pendingRestocks by remember { mutableStateOf<List<ShoppingItem>>(emptyList()) }
     var showGroceryDialog by rememberSaveable { mutableStateOf(false) }
     var showShoppingDialog by rememberSaveable { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
+    val checkedShoppingItems = state.shoppingItems.filter(ShoppingItem::isChecked)
 
     LaunchedEffect(state.error) {
         state.error?.let { message ->
@@ -101,6 +108,7 @@ fun GroceryScreen(viewModel: GroceryViewModel) {
             FloatingActionButton(onClick = {
                 if (selectedTab == PantryTab.Fridge) {
                     editingItem = null
+                    pendingRestocks = emptyList()
                     showGroceryDialog = true
                 } else {
                     showShoppingDialog = true
@@ -126,6 +134,23 @@ fun GroceryScreen(viewModel: GroceryViewModel) {
                         modifier = Modifier.fillMaxSize().padding(padding),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
+                        if (state.suggestions.isNotEmpty()) {
+                            item {
+                                Text(
+                                    "Suggested for your shopping list",
+                                    modifier = Modifier.padding(start = 20.dp, top = 18.dp),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
+                            items(state.suggestions, key = { "suggestion-${it.groceryId}" }) { suggestion ->
+                                SuggestionCard(
+                                    suggestion = suggestion,
+                                    modifier = Modifier.padding(horizontal = 16.dp),
+                                    onAdd = { viewModel.addSuggestion(suggestion) },
+                                )
+                            }
+                        }
                         item {
                             Text(
                                 "Your inventory",
@@ -140,6 +165,7 @@ fun GroceryScreen(viewModel: GroceryViewModel) {
                                 modifier = Modifier.padding(horizontal = 16.dp),
                                 onEdit = {
                                     editingItem = item
+                                    pendingRestocks = emptyList()
                                     showGroceryDialog = true
                                 },
                                 onUseOne = { viewModel.adjustAmount(item, -minOf(1.0, item.amount)) },
@@ -164,12 +190,28 @@ fun GroceryScreen(viewModel: GroceryViewModel) {
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         item {
-                            Text(
-                                "To pick up",
-                                modifier = Modifier.padding(start = 20.dp, top = 18.dp, bottom = 2.dp),
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold,
-                            )
+                            Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 18.dp)) {
+                                Text(
+                                    "To pick up",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                if (checkedShoppingItems.isNotEmpty()) {
+                                    Spacer(Modifier.height(8.dp))
+                                    Button(onClick = {
+                                        pendingRestocks = checkedShoppingItems
+                                        editingItem = null
+                                        showGroceryDialog = true
+                                    }) {
+                                        Text("Add ${checkedShoppingItems.size} checked to fridge")
+                                    }
+                                    Text(
+                                        "You’ll confirm the amount and expiry date for each item.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
                         }
                         items(state.shoppingItems, key = ShoppingItem::id) { item ->
                             ShoppingCard(
@@ -189,16 +231,28 @@ fun GroceryScreen(viewModel: GroceryViewModel) {
     }
 
     if (showGroceryDialog) {
+        val restock = pendingRestocks.firstOrNull()
         GroceryEditorDialog(
+            editorKey = editingItem?.id ?: restock?.id ?: "new-grocery",
             item = editingItem,
+            initialName = restock?.name.orEmpty(),
+            initialAmount = restock?.amount,
+            initialUnit = restock?.unit,
             onDismiss = {
                 showGroceryDialog = false
                 editingItem = null
+                pendingRestocks = emptyList()
             },
             onSave = { name, amount, unit, expiry ->
-                viewModel.saveGrocery(name, amount, unit, expiry, editingItem?.id)
-                showGroceryDialog = false
-                editingItem = null
+                if (restock != null) {
+                    viewModel.restockShoppingItem(restock.id, name, amount, unit, expiry)
+                    pendingRestocks = pendingRestocks.drop(1)
+                    if (pendingRestocks.isEmpty()) showGroceryDialog = false
+                } else {
+                    viewModel.saveGrocery(name, amount, unit, expiry, editingItem?.id)
+                    showGroceryDialog = false
+                    editingItem = null
+                }
             },
         )
     }
@@ -228,6 +282,29 @@ private fun EmptyState(title: String, description: String, modifier: Modifier = 
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+}
+
+@Composable
+private fun SuggestionCard(
+    suggestion: ShoppingSuggestion,
+    modifier: Modifier = Modifier,
+    onAdd: () -> Unit,
+) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(suggestion.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text(suggestion.reason, style = MaterialTheme.typography.bodySmall)
+            }
+            TextButton(onClick = onAdd) { Text("Add to list") }
+        }
     }
 }
 
@@ -324,18 +401,38 @@ private fun ShoppingCard(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun GroceryEditorDialog(
+    editorKey: String,
     item: GroceryItem?,
+    initialName: String,
+    initialAmount: Double?,
+    initialUnit: String?,
     onDismiss: () -> Unit,
     onSave: (String, Double, String, LocalDate) -> Unit,
 ) {
-    var name by remember(item?.id) { mutableStateOf(item?.name.orEmpty()) }
-    var amount by remember(item?.id) { mutableStateOf(item?.let { formatAmount(it.amount) } ?: "1") }
-    var unit by remember(item?.id) { mutableStateOf(item?.unit ?: "pcs") }
-    var expiry by remember(item?.id) { mutableStateOf(item?.expiryDate ?: LocalDate.now().plusDays(7)) }
+    var name by remember(editorKey) { mutableStateOf(item?.name ?: initialName) }
+    var amount by remember(editorKey) {
+        mutableStateOf(item?.let { formatAmount(it.amount) } ?: initialAmount?.let(::formatAmount) ?: "1")
+    }
+    var unit by remember(editorKey) { mutableStateOf(item?.unit ?: initialUnit ?: "pcs") }
+    var expiry by remember(editorKey) {
+        mutableStateOf(
+            item?.expiryDate
+                ?: ProductCatalog.suggestedExpiryDate(initialName)
+                ?: LocalDate.now().plusDays(7),
+        )
+    }
+    var expiryManuallySelected by remember(editorKey) { mutableStateOf(item != null) }
     var showDatePicker by remember { mutableStateOf(false) }
     val parsedAmount = amount.toDoubleOrNull()
     val valid = name.isNotBlank() && unit.isNotBlank() && parsedAmount != null &&
         parsedAmount.isFinite() && parsedAmount > 0
+
+    LaunchedEffect(name, editorKey) {
+        if (item == null && !expiryManuallySelected) {
+            val shelfDays = ProductCatalog.estimatedFridgeDays(name) ?: 7
+            expiry = LocalDate.now().plusDays(shelfDays.toLong())
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -356,19 +453,22 @@ private fun GroceryEditorDialog(
                         label = { Text("Amount") },
                         singleLine = true,
                     )
-                    OutlinedTextField(
+                    UnitDropdownField(
                         value = unit,
                         onValueChange = { unit = it },
                         modifier = Modifier.weight(1f),
-                        label = { Text("Unit") },
-                        singleLine = true,
                     )
                 }
                 TextButton(onClick = { showDatePicker = true }) {
                     Text("Expiry date: $expiry")
                 }
                 Text(
-                    "The expiry date is treated as the last usable day.",
+                    when {
+                        item != null -> "Use the package’s use-by or best-before date when available."
+                        ProductCatalog.estimatedFridgeDays(name) != null ->
+                            "Approximate fridge life: ${ProductCatalog.estimatedFridgeDays(name)} days. Package dates take precedence."
+                        else -> "No common estimate found; the default is 7 days. Use the package date when available."
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -393,6 +493,7 @@ private fun GroceryEditorDialog(
                 TextButton(onClick = {
                     datePickerState.selectedDateMillis?.let { millis ->
                         expiry = Instant.ofEpochMilli(millis).atZone(ZoneOffset.UTC).toLocalDate()
+                        expiryManuallySelected = true
                     }
                     showDatePicker = false
                 }) { Text("Done") }
@@ -400,6 +501,45 @@ private fun GroceryEditorDialog(
             dismissButton = { TextButton(onClick = { showDatePicker = false }) { Text("Cancel") } },
         ) {
             DatePicker(state = datePickerState)
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun UnitDropdownField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = it },
+        modifier = modifier,
+    ) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Unit") },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier.menuAnchor(),
+            singleLine = true,
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+        ) {
+            (listOf(value) + ProductCatalog.units).distinct().forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option) },
+                    onClick = {
+                        onValueChange(option)
+                        expanded = false
+                    },
+                )
+            }
         }
     }
 }
@@ -435,12 +575,10 @@ private fun ShoppingEditorDialog(
                         label = { Text("Amount") },
                         singleLine = true,
                     )
-                    OutlinedTextField(
+                    UnitDropdownField(
                         value = unit,
                         onValueChange = { unit = it },
                         modifier = Modifier.weight(1f),
-                        label = { Text("Unit") },
-                        singleLine = true,
                     )
                 }
             }

@@ -1,110 +1,88 @@
 package com.alexandrdisaster.fridgetracker.core
 
-import org.junit.Test
 import java.time.LocalDate
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
 
 class ShoppingSuggestionEngineTest {
+    private val today = LocalDate.of(2026, 11, 26)
 
-    // Helper method to create items
-    private fun createGrocery(id: String, name: String, amount: Double, unit: String, expiryDate: LocalDate): GroceryItem {
-        return GroceryItem(id, name, amount, unit, expiryDate)
-    }
+    private fun grocery(
+        id: String,
+        name: String,
+        amount: Double,
+        unit: String,
+        expiry: LocalDate,
+    ) = GroceryItem(id, name, amount, unit, expiry)
 
-    private fun createShoppingItem(name: String): ShoppingItem {
-        return ShoppingItem("s1", name, 1.0, "pcs")
+    @Test
+    fun lowQuantitySuggestsIndependentlyOfExpiryWindow() {
+        val item = grocery("g1", "Milk", 0.1, "bottle", today.plusDays(10))
+
+        val suggestions = ShoppingSuggestionEngine.generate(listOf(item), emptyList(), today)
+
+        assertEquals(1, suggestions.size)
+        assertEquals("Low remaining amount", suggestions.single().reason)
+        assertEquals(item.amount, suggestions.single().suggestedAmount, 0.0)
+        assertEquals(item.unit, suggestions.single().unit)
     }
 
     @Test
-    fun testLowQuantitySuggestion() {
-        val today = LocalDate.of(2026, 11, 26)
-        val groceries = listOf(
-            createGrocery("g1", "Milk", 0.1, "bottle", today.plusDays(10)) // Low
-        )
-        val shoppingItems = emptyList<ShoppingItem>()
-        
-        val suggestions = ShoppingSuggestionEngine.generate(groceries, shoppingItems, today)
-        
-        assertFalse(suggestions.isEmpty())
-        assertEquals("Low remaining amount", suggestions.first().reason)
-        assertEquals(0.1, suggestions.first().suggestedAmount, 0.001)
-        assertEquals("Milk", suggestions.first().name)
+    fun expiryAtWindowBoundarySuggestsEvenWhenQuantityIsNotLow() {
+        val item = grocery("g2", "Bread", 2.0, "pack", today.plusDays(3))
+
+        val suggestions = ShoppingSuggestionEngine.generate(listOf(item), emptyList(), today)
+
+        assertEquals("Expires soon (2026-11-29)", suggestions.single().reason)
     }
 
     @Test
-    fun testNearExpirySuggestion() {
-        val today = LocalDate.of(2026, 11, 26)
-        val groceries = listOf(
-            createGrocery("g2", "Bread", 1.0, "pack", today.plusDays(3)) // Expires within window (3 days)
-        )
-        val shoppingItems = emptyList<ShoppingItem>()
-        
-        val suggestions = ShoppingSuggestionEngine.generate(groceries, shoppingItems, today)
-        
-        assertFalse(suggestions.isEmpty())
-        assertEquals("Expires soon (2026-11-29)", suggestions.first().reason)
-        assertEquals("Bread", suggestions.first().name)
+    fun combinesLowQuantityAndNearExpiryReasons() {
+        val item = grocery("g3", "Cheese", 0.05, "jar", today.plusDays(2))
+
+        val suggestions = ShoppingSuggestionEngine.generate(listOf(item), emptyList(), today)
+
+        assertTrue(suggestions.single().reason.contains("Low remaining amount"))
+        assertTrue(suggestions.single().reason.contains("Expires soon"))
     }
 
     @Test
-    fun testCombinedReasonSuggestion() {
-        val today = LocalDate.of(2026, 11, 26)
-        val groceries = listOf(
-            createGrocery("g3", "Cheese", 0.05, "jar", today.plusDays(2)) // Low AND near expiry
-        )
-        val shoppingItems = emptyList<ShoppingItem>()
-        
-        val suggestions = ShoppingSuggestionEngine.generate(groceries, shoppingItems, today)
-        
-        assertFalse(suggestions.isEmpty())
-        // Expected combined reason: "Low remaining amount and Expires soon (2026-11-28)"
-        assertTrue(suggestions.first().reason.contains("Low remaining amount") && suggestions.first().reason.contains("Expires soon"))
-        assertEquals("Cheese", suggestions.first().name)
+    fun basketNameMatchIgnoresCaseAndWhitespace() {
+        val item = grocery("g4", "Milk Whole", 0.1, "bottle", today.plusDays(10))
+        val shopping = listOf(ShoppingItem("s1", "  milk\twhole ", 1.0, "pcs"))
+
+        val suggestions = ShoppingSuggestionEngine.generate(listOf(item), shopping, today)
+
+        assertTrue(suggestions.isEmpty())
     }
 
     @Test
-    fun testSuppressExistingBasketEntry() {
-        val today = LocalDate.of(2026, 11, 26)
-        val groceries = listOf(
-            createGrocery("g4", "Milk", 0.1, "bottle", today.plusDays(10)) // Low, but already in basket
-        )
-        val shoppingItems = listOf(
-            createShoppingItem("Milk") // Case/space-insensitive match
-        )
-        
-        val suggestions = ShoppingSuggestionEngine.generate(groceries, shoppingItems, today)
-        
-        assertTrue(suggestions.isEmpty()) // Should be suppressed
+    fun ignoresItemsThatExpiredBeforeToday() {
+        val item = grocery("g5", "Yogurt", 0.1, "jar", today.minusDays(1))
+
+        assertTrue(ShoppingSuggestionEngine.generate(listOf(item), emptyList(), today).isEmpty())
     }
 
     @Test
-    fun testIgnoreExpiredItems() {
-        val today = LocalDate.of(2026, 11, 26)
-        val groceries = listOf(
-            createGrocery("g5", "Expired Yogurt", 0.1, "jar", today.minusDays(1)) // Expired yesterday
-        )
-        val shoppingItems = emptyList<ShoppingItem>()
-        
-        val suggestions = ShoppingSuggestionEngine.generate(groceries, shoppingItems, today)
-        
-        assertTrue(suggestions.isEmpty()) // Should be ignored
+    fun expiringItemsSortAheadOfLowQuantityOnlyItems() {
+        val lowOnly = grocery("g6", "Water", 0.1, "bottle", today.plusDays(20))
+        val expiring = grocery("g7", "Yogurt", 2.0, "jar", today.plusDays(2))
+
+        val suggestions = ShoppingSuggestionEngine.generate(listOf(lowOnly, expiring), emptyList(), today)
+
+        assertEquals(listOf("Yogurt", "Water"), suggestions.map(ShoppingSuggestion::name))
+        assertFalse(suggestions.first().reason.contains("Low remaining amount"))
     }
-    
+
     @Test
-    fun testOrderingExpirySoonBeforeLowQuantity() {
-        val today = LocalDate.of(2026, 11, 26)
-        val groceries = listOf(
-            // Low quantity, not near expiry
-            createGrocery("g6", "Water", 0.1, "bottle", today.plusDays(20)), 
-            // Near expiry, not low quantity
-            createGrocery("g7", "Yogurt", 1.0, "jar", today.plusDays(2)) 
-        )
-        val shoppingItems = emptyList<ShoppingItem>()
-        
-        val suggestions = ShoppingSuggestionEngine.generate(groceries, shoppingItems, today)
-        
-        // Expect Yogurt (expiry soon) first, then Water (low quantity)
-        assertEquals("Yogurt", suggestions.first().name)
-        assertEquals("Water", suggestions.last().name)
+    fun unknownUnitsUseAConservativeSingleUnitThreshold() {
+        val low = grocery("g8", "Special ingredient", 0.5, "scoop", today.plusDays(20))
+        val plentiful = grocery("g9", "Another ingredient", 2.0, "scoop", today.plusDays(20))
+
+        val suggestions = ShoppingSuggestionEngine.generate(listOf(low, plentiful), emptyList(), today)
+
+        assertEquals(listOf("Special ingredient"), suggestions.map(ShoppingSuggestion::name))
     }
 }
