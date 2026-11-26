@@ -51,6 +51,27 @@ class PantryRepositoryTest {
     }
 
     @Test
+    fun matchingNameAndExpiryDateStackAmountsIntoOneInventoryRow() = runBlocking {
+        val expiry = LocalDate.of(2026, 11, 29)
+        repository.saveGrocery(GroceryItem("banana-first", "Bananas", 5.0, "pcs", expiry))
+        repository.saveGrocery(GroceryItem("banana-second", " bananas ", 5.0, "pcs", expiry))
+
+        val inventory = repository.observeGroceries().first()
+
+        assertEquals(1, inventory.size)
+        assertEquals("banana-first", inventory.single().id)
+        assertEquals(10.0, inventory.single().amount, 0.0)
+    }
+
+    @Test
+    fun sameProductWithDifferentExpiryDatesRemainsSeparateBatches() = runBlocking {
+        repository.saveGrocery(GroceryItem("banana-first", "Bananas", 5.0, "pcs", LocalDate.of(2026, 11, 29)))
+        repository.saveGrocery(GroceryItem("banana-second", "Bananas", 5.0, "pcs", LocalDate.of(2026, 11, 30)))
+
+        assertEquals(2, repository.observeGroceries().first().size)
+    }
+
+    @Test
     fun restockMovesCheckedItemOnceWithChosenFields() = runBlocking {
         repository.addShoppingItem(ShoppingEntry("Milk", 1.0, "bottle"))
         val id = repository.observeShoppingItems().first().single().id

@@ -31,7 +31,7 @@ class RoomPantryRepository internal constructor(
                 moveToShopping(row.copy(amount = dao.grocery(item.id)?.amount ?: 1.0))
                 finished = true
             } else {
-                dao.save(row)
+                saveOrStack(row)
             }
         }
         if (finished) PantryAlertNotifications.finished(appContext, item.name)
@@ -63,6 +63,27 @@ class RoomPantryRepository internal constructor(
         return expired
     }
 
+    /** Merge identical product batches, but keep different units or expiry dates distinct. */
+    private suspend fun saveOrStack(row: GroceryRow) {
+        val matchingBatch = dao.groceriesExpiringOn(row.expiryDay).firstOrNull { candidate ->
+            candidate.id != row.id &&
+                normalize(candidate.name) == normalize(row.name) &&
+                normalize(candidate.unit) == normalize(row.unit)
+        }
+        if (matchingBatch == null) {
+            dao.save(row)
+            return
+        }
+
+        val combinedAmount = matchingBatch.amount + row.amount
+        require(combinedAmount.isFinite()) { "Combined grocery amount must be finite." }
+        dao.save(matchingBatch.copy(amount = combinedAmount))
+        dao.removeGrocery(row.id)
+    }
+
+    private fun normalize(value: String): String =
+        value.trim().lowercase().replace(Regex("\\s+"), "")
+
     private suspend fun moveToShopping(row: GroceryRow) {
         addShoppingItem(ShoppingEntry(row.name, row.amount, row.unit))
         dao.removeGrocery(row.id)
@@ -81,7 +102,7 @@ class RoomPantryRepository internal constructor(
             if (dao.removeShopping(shoppingItemId) == 0) return@withTransaction
             require(name.isNotBlank() && unit.isNotBlank())
             require(amount.isFinite() && amount > 0.0)
-            dao.save(GroceryRow(UUID.randomUUID().toString(), name.trim(), amount, unit.trim(), expiryDate.toEpochDay()))
+            saveOrStack(GroceryRow(UUID.randomUUID().toString(), name.trim(), amount, unit.trim(), expiryDate.toEpochDay()))
         }
     }
 

@@ -40,6 +40,9 @@ internal interface PantryDao {
     @Query("SELECT * FROM groceries WHERE id = :id")
     suspend fun grocery(id: String): GroceryRow?
 
+    @Query("SELECT * FROM groceries WHERE expiryDay = :expiryDay ORDER BY id")
+    suspend fun groceriesExpiringOn(expiryDay: Long): List<GroceryRow>
+
     // The printed date is the final usable day, in the device's local time zone.
     @Query("SELECT * FROM groceries WHERE expiryDay < :today ORDER BY expiryDay, name, id")
     suspend fun expired(today: Long): List<GroceryRow>
