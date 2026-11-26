@@ -3,12 +3,20 @@ package com.alexandrdisaster.fridgetracker.data
 import android.content.Context
 import androidx.room.withTransaction
 import com.alexandrdisaster.fridgetracker.core.*
+import com.alexandrdisaster.fridgetracker.notifications.PantryAlertNotifications
 import kotlinx.coroutines.flow.map
 import java.time.LocalDate
 import java.util.UUID
 
-class RoomPantryRepository(context: Context) : PantryRepository {
-    private val db = PantryDatabase.get(context)
+class RoomPantryRepository internal constructor(
+    private val db: PantryDatabase,
+    private val appContext: Context,
+) : PantryRepository {
+    constructor(context: Context) : this(
+        PantryDatabase.get(context.applicationContext),
+        context.applicationContext,
+    )
+
     private val dao = db.pantry()
 
     override fun observeGroceries() = dao.groceries().map { rows -> rows.map(GroceryRow::item) }
@@ -17,25 +25,42 @@ class RoomPantryRepository(context: Context) : PantryRepository {
     override suspend fun saveGrocery(item: GroceryItem) {
         require(item.amount.isFinite())
         val row = GroceryRow(item.id, item.name, item.amount, item.unit, item.expiryDate.toEpochDay())
+        var finished = false
         db.withTransaction {
-            if (item.isFinished) moveToShopping(row.copy(amount = dao.grocery(item.id)?.amount ?: 1.0))
-            else dao.save(row)
+            if (item.isFinished) {
+                moveToShopping(row.copy(amount = dao.grocery(item.id)?.amount ?: 1.0))
+                finished = true
+            } else {
+                dao.save(row)
+            }
         }
+        if (finished) PantryAlertNotifications.finished(appContext, item.name)
     }
 
     override suspend fun adjustAmount(groceryId: String, delta: Double) {
+        var finishedItem: GroceryRow? = null
         db.withTransaction {
             val row = dao.grocery(groceryId) ?: return@withTransaction
             val remaining = row.adjusted(delta)
             // Replenish the last positive quantity rather than queuing a zero-quantity entry.
-            if (remaining == null) moveToShopping(row) else dao.save(remaining)
+            if (remaining == null) {
+                moveToShopping(row)
+                finishedItem = row
+            } else {
+                dao.save(remaining)
+            }
         }
+        finishedItem?.let { PantryAlertNotifications.finished(appContext, it.name) }
     }
 
-    override suspend fun processExpiredItems(today: LocalDate): List<GroceryItem> = db.withTransaction {
-        val expired = dao.expired(today.toEpochDay())
-        for (row in expired) moveToShopping(row)
-        expired.map(GroceryRow::item)
+    override suspend fun processExpiredItems(today: LocalDate): List<GroceryItem> {
+        val expired = db.withTransaction {
+            val rows = dao.expired(today.toEpochDay())
+            for (row in rows) moveToShopping(row)
+            rows.map(GroceryRow::item)
+        }
+        PantryAlertNotifications.expired(appContext, expired.map(GroceryItem::name))
+        return expired
     }
 
     private suspend fun moveToShopping(row: GroceryRow) {

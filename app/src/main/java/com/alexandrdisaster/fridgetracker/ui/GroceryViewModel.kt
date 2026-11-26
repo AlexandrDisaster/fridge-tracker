@@ -1,90 +1,110 @@
 package com.alexandrdisaster.fridgetracker.ui
 
 import androidx.lifecycle.ViewModel
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import com.alexandrdisaster.fridgetracker.core.PantryRepository
+import androidx.lifecycle.viewModelScope
 import com.alexandrdisaster.fridgetracker.core.GroceryItem
-import com.alexandrdisaster.fridgetracker.core.ShoppingItem
+import com.alexandrdisaster.fridgetracker.core.PantryRepository
 import com.alexandrdisaster.fridgetracker.core.ShoppingEntry
+import com.alexandrdisaster.fridgetracker.core.ShoppingItem
 import java.time.LocalDate
+import java.util.UUID
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
+
+data class PantryUiState(
+    val groceries: List<GroceryItem> = emptyList(),
+    val shoppingItems: List<ShoppingItem> = emptyList(),
+    val isLoading: Boolean = true,
+    val error: String? = null,
+)
 
 class GroceryViewModel(private val repository: PantryRepository) : ViewModel() {
-    private val _groceryState = MutableStateFlow<List<GroceryItem>>(emptyList())
-    val groceryState: StateFlow<List<GroceryItem>> = _groceryState
+    private val errors = MutableStateFlow<String?>(null)
 
-    private val _shoppingState = MutableStateFlow<List<ShoppingItem>>(emptyList())
-    val shoppingState: StateFlow<List<ShoppingItem>> = _shoppingState
-
-    private val _uiState = MutableStateFlow<UiState>(UiState.Loading)
-    val uiState: StateFlow<UiState> = _uiState
-
-    sealed class UiState {
-        object Loading : UiState()
-        data class Success(val isGroceryListEmpty: Boolean) : UiState()
-        data class Error(val message: String) : UiState()
-    }
+    val state: StateFlow<PantryUiState> = combine(
+        repository.observeGroceries(),
+        repository.observeShoppingItems(),
+        errors,
+    ) { groceries, shoppingItems, error ->
+        PantryUiState(
+            groceries = groceries,
+            shoppingItems = shoppingItems,
+            isLoading = false,
+            error = error,
+        )
+    }.catch { cause ->
+        emit(PantryUiState(isLoading = false, error = cause.message ?: "Could not load pantry data."))
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), PantryUiState())
 
     init {
-        // Observe repositories
-        repository.observeGroceries().collect { items ->
-            _groceryState.value = items
-            updateUiState()
+        launchOperation { repository.processExpiredItems(LocalDate.now()) }
+    }
+
+    fun saveGrocery(
+        name: String,
+        amount: Double,
+        unit: String,
+        expiryDate: LocalDate,
+        existingId: String? = null,
+    ) {
+        val cleanName = name.trim()
+        val cleanUnit = unit.trim()
+        if (cleanName.isEmpty() || cleanUnit.isEmpty() || !amount.isFinite() || amount <= 0.0) {
+            errors.value = "Enter a name, a positive amount, and a unit."
+            return
         }
-        repository.observeShoppingItems().collect { items ->
-            _shoppingState.value = items
-            updateUiState()
+        val item = GroceryItem(
+            id = existingId ?: UUID.randomUUID().toString(),
+            name = cleanName,
+            amount = amount,
+            unit = cleanUnit,
+            expiryDate = expiryDate,
+        )
+        launchOperation { repository.saveGrocery(item) }
+    }
+
+    fun adjustAmount(item: GroceryItem, delta: Double) {
+        if (!delta.isFinite() || delta == 0.0) return
+        launchOperation { repository.adjustAmount(item.id, delta) }
+    }
+
+    fun finishGrocery(item: GroceryItem) = adjustAmount(item, -item.amount)
+
+    fun removeGrocery(groceryId: String) =
+        launchOperation { repository.removeGrocery(groceryId) }
+
+    fun addShoppingItem(name: String, amount: Double, unit: String) {
+        val cleanName = name.trim()
+        val cleanUnit = unit.trim()
+        if (cleanName.isEmpty() || cleanUnit.isEmpty() || !amount.isFinite() || amount <= 0.0) {
+            errors.value = "Enter a name, a positive amount, and a unit."
+            return
         }
-        // Process expired items daily (or on startup)
-        // Note: In a real Android app, this would be a WorkManager/CoroutineScope job,
-        // but for this implementation, we trigger it on init/load.
-        // The current date is 2026-11-26.
-        // We assume the repository handles the atomic movement of expired items.
-        // For now, we just observe and let the repository handle the process.
+        launchOperation { repository.addShoppingItem(ShoppingEntry(cleanName, amount, cleanUnit)) }
     }
 
-    private fun updateUiState() {
-        val isGroceryListEmpty = _groceryState.value.isEmpty()
-        _uiState.value = if (_groceryState.value.isEmpty() && _shoppingState.value.isEmpty()) {
-            UiState.Success(true)
-        } else {
-            UiState.Success(false)
-        }
+    fun setShoppingItemChecked(itemId: String, checked: Boolean) =
+        launchOperation { repository.setShoppingItemChecked(itemId, checked) }
+
+    fun removeShoppingItem(itemId: String) =
+        launchOperation { repository.removeShoppingItem(itemId) }
+
+    fun clearError() {
+        errors.value = null
     }
 
-    // --- Actions ---
-
-    suspend fun saveGrocery(item: GroceryItem) {
-        repository.saveGrocery(item)
-    }
-
-    suspend fun adjustAmount(groceryId: String, delta: Double) {
-        repository.adjustAmount(groceryId, delta)
-    }
-
-    suspend fun removeGrocery(groceryId: String) {
-        repository.removeGrocery(groceryId)
-    }
-
-    suspend fun addShoppingItem(entry: ShoppingEntry) {
-        repository.addShoppingItem(entry)
-    }
-
-    suspend fun setShoppingItemChecked(itemId: String, checked: Boolean) {
-        repository.setShoppingItemChecked(itemId, checked)
-    }
-
-    suspend fun removeShoppingItem(itemId: String) {
-        repository.removeShoppingItem(itemId)
-    }
-
-    /** Moves expired groceries to the shopping list and updates the state. */
-    suspend fun checkAndProcessExpiredItems() {
-        val today = LocalDate.of(2026, 11, 26) // Use context date
-        val expiredItems = repository.processExpiredItems(today)
-        if (expiredItems.isNotEmpty()) {
-            // The repository handles the atomic move; observation will update the state automatically.
+    private fun launchOperation(operation: suspend () -> Unit) {
+        viewModelScope.launch {
+            try {
+                operation()
+            } catch (cause: Exception) {
+                errors.value = cause.message ?: "Something went wrong. Please try again."
+            }
         }
     }
 }
