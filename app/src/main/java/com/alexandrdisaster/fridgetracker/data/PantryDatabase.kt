@@ -51,7 +51,7 @@ internal interface PantryDao {
     suspend fun removeGrocery(id: String)
 
     @Query("DELETE FROM shopping WHERE id = :id")
-    suspend fun removeShopping(id: String)
+    suspend fun removeShopping(id: String): Int
 
     @Query("UPDATE shopping SET isChecked = :checked WHERE id = :id")
     suspend fun check(id: String, checked: Boolean)
