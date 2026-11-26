@@ -9,3 +9,10 @@ local.properties
 # Local toolchains and diagnostics
 .tooling/
 *.log
+
+# Android release signing material
+*.jks
+*.keystore
+keystore.properties
+signing.properties
+*.p12
